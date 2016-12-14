@@ -1,0 +1,196 @@
+<?php
+/**
+* 
+* 
+* 
+*/
+function hivassist_menu(){
+   $items = array();
+ 
+   $items['tool/results'] = array(
+    'title'            => t('HIV-ASSIST Results'),
+    'page callback'    => 'hivassist_output',
+    'access arguments' => array('access content'),
+    'file' => 'inc/results.inc',
+   );
+   
+   $items['tool/savedinputs'] = array(
+    'title'            => t('User Specific Saved Inputs'),
+    'page callback'    => 'hivassist_saved_inputs',
+    'access callback'  => 'user_is_logged_in',
+    'file'             => 'inc/savedinputs.inc',
+   );
+ 
+    $items['tool/viewfeedback'] = array(
+    'title'            => t('Regimen Feedback'),
+    'page callback'    => 'hivassist_view_feedback',
+    'access callback'  => 'hivassist_has_roles',
+    'access arguments' => array(array('manager', 'administrator')),
+    'file'             => 'inc/viewfeedback.inc',
+   );
+ 
+   return $items;
+ }
+ 
+
+function hivassist_has_roles(array $roles) {
+  global $user;
+  return empty(array_intersect($roles, array_values($user->roles))) ? FALSE : TRUE;
+}
+
+ 
+ 
+/**
+* 
+* 
+* 
+*/ 
+function hivassist_form_alter(&$form, &$form_state, $form_id) {
+  if ($form_id == 'webform_client_form_46') {
+    $form['actions']['submit']['#attributes'] = array('class' => array('ladda-button'));
+    $form['#submit'][] = 'hivassist_submit_handler';
+  } elseif ($form_id == 'webform_client_form_48') {
+    $form['actions']['submit']['#attributes'] = array('class' => array('ladda-button'));
+  }
+}
+
+/**
+* 
+* 
+* 
+*/
+function hivassist_submit_handler(&$form, &$form_state) {
+  $sid = $form_state['values']['details']['sid'];
+  $nid = $form_state['values']['details']['nid'];
+
+//  dpm($form_state);
+
+  $option['query'] = array(
+      'mutations' => $form_state['values']['submitted'][1],    
+      'comorbidities' => $form_state['values']['submitted'][3],
+      'interactions' => $form_state['values']['submitted'][7],
+      'tropism' => $form_state['values']['submitted'][11],
+      'viralload' => $form_state['values']['submitted'][5],
+      'hlab5701' => $form_state['values']['submitted'][6],
+      'pooradherence' => $form_state['values']['submitted'][9],
+      'history' => $form_state['values']['submitted'][10],
+      'exclude' => $form_state['values']['submitted'][8],
+  );
+
+  if (($sid && $form_state['values']['submitted'][12] != 'yes') || (user_is_logged_in() == FALSE)) {
+    module_load_include('inc', 'webform', 'includes/webform.submissions');
+    $node = $form['#node'];
+    $submission = webform_get_submission($nid, $sid);
+    webform_submission_delete($node, $submission);
+  }
+  
+  drupal_goto('tool/results', $option);
+}
+
+/**
+* Implementation of hook_theme().
+* DRUPAL WONT SEE THIS HOOK UNTIL YOU CLEAR YOUR DRUPAL CACHE
+*/
+function hivassist_theme() {
+  return array(
+    'hivassist_results' => array(
+      'template' => 'tpl/results',
+      'variables' => array(
+        'results' => null, 
+      ),
+    ),
+    'hivassist_savedinputs' => array(
+      'template' => 'tpl/savedinputs',
+      'variables' => array(
+        'results' => null, 
+      ),
+    ),
+    'hivassist_viewfeedback' => array(
+      'template' => 'tpl/viewfeedback',
+      'variables' => array(
+        'results' => null,
+      ),
+    ),
+  );
+}
+
+/**
+* 
+* 
+* 
+*/
+$GLOBALS['defs']['all'] = $GLOBALS['defs']['exclude'] = array(
+	'NRTI' => array('3TC', 'FTC', 'ABC', 'AZT', 'D4T', 'DDI', 'TDF', 'TAF'), 
+	'NNRTI' => array('EFV', 'NVP', 'ETR', 'RPV'),
+	'PI' => array('FPV', 'IDV', 'NFV', 'SQV', 'LPV', 'ATV', 'TPV', 'DRV'),
+	'INSTI' => array('RAL', 'EVG', 'DTG'),
+	'CCR5' => array('MVC')
+);
+
+
+/**
+* 
+* 
+* 
+*/
+function hivassist_output() {
+  global $defs;
+
+  /// store the mutations from GET
+  $mutations['list'] = $_GET['mutations'];
+  $comorbidities['list'] = $_GET['comorbidities'];
+  $interactions['list'] = $_GET['interactions'];
+  $exclude = $_GET['exclude'];
+  $options = array(
+    'tropism' => $_GET['tropism'],
+    'viralload' => $_GET['viralload'],
+    'hlab5701' => $_GET['hlab5701'],
+    'pooradherence' => $_GET['pooradherence'],
+    'history' => $_GET['history'],
+  );
+  
+  hivassist_exclude_drugs($exclude, $defs);
+
+  hivassist_search_mutations($mutations);
+
+  hivassist_search_comorbidities($comorbidities);
+
+  hivassist_search_interactions($interactions);
+
+  $regimens = hivassist_generate_generic_rankings($options);
+ 
+  hivassist_generate_specific_rankings($regimens, $options);
+
+  hivassist_process_rankings($regimens, $mutations, $comorbidities, $interactions, $options);
+
+  $mutations_table = hivassist_generate_mutations_table($mutations);
+ 
+  $comorbidities_table = hivassist_generate_comorbidities_interactions_table('comorbidities', $comorbidities);
+
+  $interactions_table = hivassist_generate_comorbidities_interactions_table('interactions', $interactions);
+
+  $regimens_table = hivassist_generate_regimens_table($regimens);
+
+  $results = array(
+    'mutations_table' => $mutations_table,
+    'comorbidities_table' => $comorbidities_table,
+    'interactions_table' => $interactions_table,
+    'regimens_table' => $regimens_table,
+  );
+
+  drupal_add_js(array('hivassist' => 
+    array('mutations' => $mutations['list'],
+          'comorbidities' => $comorbidities['list'],
+          'interactions' => $interactions['list'],
+          'viralload' => $options['viralload'],
+          'hlab5701' => $options['hlab5701'],
+          'tropism' => $options['tropism'],
+          'history' => $options['history'],
+          'pooradherence' => $options['pooradherence'],
+          'exclude' => $exclude,
+          'regimens' => $regimens)),
+    array('type' => 'setting'));
+
+  $output = theme('hivassist_results', array('results' => $results));
+  return $output;
+}

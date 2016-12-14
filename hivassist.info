@@ -1,0 +1,3 @@
+name = HIV ASSIST
+description = Module for HIV Decision Support Tool.
+core = 7.x
